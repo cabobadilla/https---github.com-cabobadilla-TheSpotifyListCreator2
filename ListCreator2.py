@@ -74,19 +74,32 @@ def get_auth_url(client_id, redirect_uri, scopes):
 
 # Function to generate songs, playlist name, and description using ChatGPT
 def generate_playlist_details(mood, genres, hidden_gems=False, discover_new=False):
-    """
-    Generate a playlist name, description, and 15 to 25 songs that connect with the mood and genres provided.
-    ChatGPT will act as a DJ curating songs that align with the mood.
-    
-    Args:
-        mood (str): The desired mood for the playlist
-        genres (list): List of music genres
-        hidden_gems (bool): Whether to include lesser-known tracks
-        discover_new (bool): Whether to include recent tracks (2020-2024)
-    """
     client = openai.OpenAI(api_key=OPENAI_API_KEY)
+    system_content = build_system_content(hidden_gems, discover_new)
+    user_content = build_user_content(mood, genres, hidden_gems, discover_new)
     
-    system_content = (
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_content},
+    ]
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            max_tokens=1500,
+            temperature=0.8 if hidden_gems or discover_new else 0.7,
+        )
+        playlist_response = response.choices[0].message.content.strip()
+        st.write("📝 Response received from ChatGPT")
+        st.write("🔍 Response length:", len(playlist_response))
+        return validate_and_clean_json(playlist_response)
+    except Exception as e:
+        st.error(f"❌ ChatGPT API Error: {str(e)}")
+        return None, None, []
+
+def build_system_content(hidden_gems, discover_new):
+    content = (
         "You are a music expert and DJ who curates playlists based on mood and genres. "
         "Your job is to act as a DJ and create a playlist that connects deeply with the given mood and genres. "
         "Generate a playlist name (max 5 words), a description (max 25 words), and min 15 to max 25 songs. "
@@ -98,66 +111,32 @@ def generate_playlist_details(mood, genres, hidden_gems=False, discover_new=Fals
         '{"title": "Song Name", "artist": "Artist Name", "year": 2024, "is_hidden_gem": false, "is_new_music": false}'
         ']}'
     )
-    
     if hidden_gems:
-        system_content += (
+        content += (
             "Since hidden gems mode is activated, create a more creative and unique playlist name "
             "that reflects the underground/alternative nature of the selection. "
             "The description should mention that this is a special curated selection of hidden gems. "
             "50% of songs should be lesser-known hidden gems in these genres. "
         )
-    
     if discover_new:
-        system_content += (
+        content += (
             "Since discover new music mode is activated, 50% of the songs should be from "
             "2023 onwards. Mark these songs with 'is_new_music' flag. "
             "The description should mention that this includes recent releases. "
         )
+    return content
 
-    messages = [
-        {
-            "role": "system",
-            "content": system_content
-        },
-        {
-            "role": "user",
-            "content": f"Create a playlist for the mood '{mood}' and genres {', '.join(genres)}. "
-                      f"Make sure the songs align with the mood and genres. "
-                      f"{'Include 40% hidden gems and lesser-known songs.' if hidden_gems else ''} "
-                      f"{'Include 40% songs from 2023-2024 with accurate release years.' if discover_new else ''} "
-                      f"Ensure each song has an accurate release year as an integer."
-        },
-    ]
-    
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=1500,
-            temperature=0.8 if hidden_gems or discover_new else 0.7,
-        )
-        playlist_response = response.choices[0].message.content.strip()
-        
-        st.write("📝 Response received from ChatGPT")
-        st.write("🔍 Response length:", len(playlist_response))
-        
-        try:
-            return validate_and_clean_json(playlist_response)
-        except ValueError as e:
-            st.error("❌ JSON Validation Error:")
-            st.error(str(e))
-            return None, None, []
-
-    except Exception as e:
-        st.error(f"❌ ChatGPT API Error: {str(e)}")
-        return None, None, []
+def build_user_content(mood, genres, hidden_gems, discover_new):
+    return (
+        f"Create a playlist for the mood '{mood}' and genres {', '.join(genres)}. "
+        f"Make sure the songs align with the mood and genres. "
+        f"{'Include 40% hidden gems and lesser-known songs.' if hidden_gems else ''} "
+        f"{'Include 40% songs from 2023-2024 with accurate release years.' if discover_new else ''} "
+        f"Ensure each song has an accurate release year as an integer."
+    )
 
 # Function to validate and clean JSON
 def validate_and_clean_json(raw_response):
-    """
-    Validate and clean the JSON response from ChatGPT.
-    Ensures that it conforms to the expected structure.
-    """
     if not raw_response:
         raise ValueError("ChatGPT response is empty.")
     
@@ -166,67 +145,66 @@ def validate_and_clean_json(raw_response):
     try:
         playlist_data = json.loads(raw_response)
         st.write("✅ Initial JSON parsing successful")
+    except json.JSONDecodeError:
+        playlist_data = attempt_json_cleanup(raw_response)
+    
+    validate_playlist_data(playlist_data)
+    return playlist_data["name"], playlist_data["description"], playlist_data["songs"]
+
+def attempt_json_cleanup(raw_response):
+    st.write("⚠️ Initial JSON parsing failed, attempting cleanup...")
+    cleaned_response = clean_response(raw_response)
+    st.write("🔍 Cleaned response preview (first 200 chars):")
+    st.code(cleaned_response[:200])
+    
+    try:
+        return json.loads(cleaned_response)
     except json.JSONDecodeError as e:
-        st.write("⚠️ Initial JSON parsing failed, attempting cleanup...")
-        # Remove any markdown formatting and clean the response
-        cleaned_response = raw_response.replace("```json", "").replace("```", "").strip()
-        # Replace smart quotes and apostrophes with standard ones
-        cleaned_response = cleaned_response.replace(""", '"').replace(""", '"')
-        cleaned_response = cleaned_response.replace("'", "'").replace("'", "'")
-        # Remove any newlines and extra whitespace
-        cleaned_response = " ".join(cleaned_response.split())
-        # Ensure proper JSON string formatting
-        cleaned_response = cleaned_response.replace('\\"', '"').replace('\\n', ' ')
-        
-        st.write("🔍 Cleaned response preview (first 200 chars):")
-        st.code(cleaned_response[:200])
-        
-        try:
-            playlist_data = json.loads(cleaned_response)
-            st.write("✅ JSON parsing successful after cleanup")
-        except json.JSONDecodeError as e:
-            st.error(f"❌ JSON Error Details:\nPosition: {e.pos}\nLine: {e.lineno}\nColumn: {e.colno}")
-            st.error("❌ Raw Response Preview:")
-            st.code(raw_response[:200])
-            raise ValueError(f"Could not process JSON even after cleaning. Error: {str(e)}")
+        st.error(f"❌ JSON Error Details:\nPosition: {e.pos}\nLine: {e.lineno}\nColumn: {e.colno}")
+        st.error("❌ Raw Response Preview:")
+        st.code(raw_response[:200])
+        raise ValueError(f"Could not process JSON even after cleaning. Error: {str(e)}")
+
+def clean_response(raw_response):
+    cleaned_response = raw_response.replace("```json", "").replace("```", "").strip()
+    cleaned_response = cleaned_response.replace(""", '"').replace(""", '"')
+    cleaned_response = cleaned_response.replace("'", "'").replace("'", "'")
+    cleaned_response = " ".join(cleaned_response.split())
+    return cleaned_response.replace('\\"', '"').replace('\\n', ' ')
+
+def validate_playlist_data(playlist_data):
     if not isinstance(playlist_data, dict):
         raise ValueError("JSON is not a valid object.")
-    if "name" not in playlist_data or "description" not in playlist_data or "songs" not in playlist_data:
-        raise ValueError("JSON does not contain expected keys ('name', 'description', 'songs').")
+    required_keys = {"name", "description", "songs"}
+    if not required_keys.issubset(playlist_data):
+        raise ValueError(f"JSON does not contain expected keys {required_keys}.")
     if not isinstance(playlist_data["songs"], list):
         raise ValueError("The 'songs' field is not a list.")
-    if not all("title" in song and "artist" in song for song in playlist_data["songs"]):
-        raise ValueError("Songs do not contain 'title' and 'artist' fields.")
-    if not all(isinstance(song.get('is_hidden_gem', False), bool) for song in playlist_data["songs"]):
-        # If is_hidden_gem is missing, default to False
-        for song in playlist_data["songs"]:
-            if 'is_hidden_gem' not in song:
-                song['is_hidden_gem'] = False
-    if not all(isinstance(song.get('is_new_music', False), bool) for song in playlist_data["songs"]):
-        # If is_new_music is missing, default to False
-        for song in playlist_data["songs"]:
-            if 'is_new_music' not in song:
-                song['is_new_music'] = False
-    if not all("title" in song and "artist" in song and "year" in song for song in playlist_data["songs"]):
-        raise ValueError("Songs do not contain required fields ('title', 'artist', 'year').")
-    if not all(isinstance(song.get('year', 0), int) for song in playlist_data["songs"]):
-        raise ValueError("Year must be an integer value.")
-    return playlist_data["name"], playlist_data["description"], playlist_data["songs"]
+    for song in playlist_data["songs"]:
+        if not all(key in song for key in ["title", "artist", "year"]):
+            raise ValueError("Songs do not contain required fields ('title', 'artist', 'year').")
+        if not isinstance(song.get('year', 0), int):
+            raise ValueError("Year must be an integer value.")
+        song.setdefault('is_hidden_gem', False)
+        song.setdefault('is_new_music', False)
 
 # Function to search for songs on Spotify
 def search_tracks(token, title, artist):
-    """
-    Search for a track on Spotify using the given title and artist.
-    """
     query = f"{title} {artist}"
     url = "https://api.spotify.com/v1/search"
     headers = {"Authorization": f"Bearer {token}"}
     params = {"q": query, "type": "track", "limit": 1}
     response = requests.get(url, headers=headers, params=params)
+    
     if response.status_code != 200:
-        st.error(f"❌ Error searching for songs: {response.json().get('error', {}).get('message', 'Unknown error')}")
+        handle_spotify_error(response)
         return {"tracks": {"items": []}}
+    
     return response.json()
+
+def handle_spotify_error(response):
+    error_message = response.json().get('error', {}).get('message', 'Unknown error')
+    st.error(f"❌ Error searching for songs: {error_message}")
 
 # Function to create a playlist on Spotify
 def create_playlist(token, user_id, name, description):
@@ -254,92 +232,100 @@ def main():
         unsafe_allow_html=True
     )
     
-    # Step 1: Authorization
     st.markdown("<h2 style='color: #1DB954;'>🔑 Authentication</h2>", unsafe_allow_html=True)
     if "access_token" not in st.session_state:
-        auth_url = get_auth_url(CLIENT_ID, REDIRECT_URI, SCOPES)
-        st.markdown(
-            f"<div style='text-align: center;'><a href='{auth_url}' target='_blank' style='color: #1DB954; font-weight: bold;'>🔑 Login with Spotify</a></div>",
-            unsafe_allow_html=True
-        )
-        query_params = st.query_params
-        if "code" in query_params:
-            code = query_params["code"]
-            token_response = requests.post(
-                "https://accounts.spotify.com/api/token",
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": REDIRECT_URI,
-                    "client_id": CLIENT_ID,
-                    "client_secret": CLIENT_SECRET,
-                },
-            ).json()
-            if "access_token" in token_response:
-                st.session_state.access_token = token_response["access_token"]
-                st.success("✅ Authentication completed.")
-            else:
-                st.error("❌ Authentication error.")
+        display_authentication_link()
     else:
         st.success("✅ Already authenticated.")
 
-    # Step 2: Playlist generation
     if "access_token" in st.session_state:
-        st.markdown("<h2>🎶 Generate and Create Playlist</h2>", unsafe_allow_html=True)
-        user_id = st.text_input("🎤 Enter your Spotify user ID", placeholder="Spotify Username")
-        mood = st.selectbox("😊 Select your desired mood", config["moods"])
-        genres = st.multiselect("🎸 Select music genres", config["genres"])
-        col1, col2 = st.columns(2)
-        with col1:
-            hidden_gems = st.checkbox("💎 Hidden Gems", help="Include lesser-known tracks in your playlist")
-        with col2:
-            discover_new = st.checkbox("🆕 New Music", help="Include recent tracks from the last 3 years")
+        display_playlist_creation_form()
 
-        if st.button("🎵 Generate and Create Playlist 🎵"):
-            if user_id and mood and genres:
-                st.info("🎧 Generating songs, name and description...")
-                name, description, songs = generate_playlist_details(mood, genres, hidden_gems, discover_new)
+def display_authentication_link():
+    auth_url = get_auth_url(CLIENT_ID, REDIRECT_URI, SCOPES)
+    st.markdown(
+        f"<div style='text-align: center;'><a href='{auth_url}' target='_blank' style='color: #1DB954; font-weight: bold;'>🔑 Login with Spotify</a></div>",
+        unsafe_allow_html=True
+    )
+    query_params = st.query_params
+    if "code" in query_params:
+        handle_spotify_authentication(query_params["code"])
 
-                if name and description and songs:
-                    st.success(f"✅ Generated name: {name}")
-                    st.info(f"📜 Generated description: {description}")
-                    st.success(f"🎵 Generated songs:")
-                    
-                    st.markdown("<div style='margin-bottom: 10px'><b>Legend:</b> ⭐ = Top Hit | 💎 = Hidden Gem | 🆕 = New Music</div>", unsafe_allow_html=True)
-                    
-                    track_uris = []
-                    for idx, song in enumerate(songs, 1):
-                        title = song['title']
-                        artist = song['artist']
-                        is_hidden_gem = song.get('is_hidden_gem', False)
-                        is_new_music = song.get('is_new_music', False)
-                        
-                        search_response = search_tracks(st.session_state.access_token, title, artist)
-                        if "tracks" in search_response and search_response["tracks"]["items"]:
-                            track_uris.append(search_response["tracks"]["items"][0]["uri"])
-                            icons = []
-                            if is_hidden_gem:
-                                icons.append("💎")
-                            if is_new_music:
-                                icons.append("🆕")
-                            if not icons:
-                                icons.append("⭐")
-                            year = song.get('year', 'N/A')
-                            st.write(f"{idx}. **{title}** - {artist} ({year}) {' '.join(icons)}")
+def handle_spotify_authentication(code):
+    token_response = requests.post(
+        "https://accounts.spotify.com/api/token",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI,
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+        },
+    ).json()
+    if "access_token" in token_response:
+        st.session_state.access_token = token_response["access_token"]
+        st.success("✅ Authentication completed.")
+    else:
+        st.error("❌ Authentication error.")
 
-                    if track_uris:
-                        playlist_response = create_playlist(st.session_state.access_token, user_id, name, description)
-                        if "id" in playlist_response:
-                            playlist_id = playlist_response["id"]
-                            add_tracks_to_playlist(st.session_state.access_token, playlist_id, track_uris)
-                            st.success(f"✅ Playlist '{name}' successfully created on Spotify.")
-                        else:
-                            st.error("❌ Could not create playlist on Spotify.")
-                else:
-                    st.error("❌ Could not generate playlist.")
+def display_playlist_creation_form():
+    st.markdown("<h2>🎶 Generate and Create Playlist</h2>", unsafe_allow_html=True)
+    user_id = st.text_input("🎤 Enter your Spotify user ID", placeholder="Spotify Username")
+    mood = st.selectbox("😊 Select your desired mood", config["moods"])
+    genres = st.multiselect("🎸 Select music genres", config["genres"])
+    col1, col2 = st.columns(2)
+    with col1:
+        hidden_gems = st.checkbox("💎 Hidden Gems", help="Include lesser-known tracks in your playlist")
+    with col2:
+        discover_new = st.checkbox("🆕 New Music", help="Include recent tracks from the last 3 years")
+
+    if st.button("🎵 Generate and Create Playlist 🎵"):
+        if user_id and mood and genres:
+            st.info("🎧 Generating songs, name and description...")
+            name, description, songs = generate_playlist_details(mood, genres, hidden_gems, discover_new)
+            handle_playlist_creation(user_id, name, description, songs)
+        else:
+            st.warning("⚠️ Please complete all fields to create the playlist.")
+
+def handle_playlist_creation(user_id, name, description, songs):
+    if name and description and songs:
+        st.success(f"✅ Generated name: {name}")
+        st.info(f"📜 Generated description: {description}")
+        st.success(f"🎵 Generated songs:")
+        
+        st.markdown("<div style='margin-bottom: 10px'><b>Legend:</b> ⭐ = Top Hit | 💎 = Hidden Gem | 🆕 = New Music</div>", unsafe_allow_html=True)
+        
+        track_uris = []
+        for idx, song in enumerate(songs, 1):
+            title = song['title']
+            artist = song['artist']
+            is_hidden_gem = song.get('is_hidden_gem', False)
+            is_new_music = song.get('is_new_music', False)
+            
+            search_response = search_tracks(st.session_state.access_token, title, artist)
+            if "tracks" in search_response and search_response["tracks"]["items"]:
+                track_uris.append(search_response["tracks"]["items"][0]["uri"])
+                icons = []
+                if is_hidden_gem:
+                    icons.append("💎")
+                if is_new_music:
+                    icons.append("🆕")
+                if not icons:
+                    icons.append("⭐")
+                year = song.get('year', 'N/A')
+                st.write(f"{idx}. **{title}** - {artist} ({year}) {' '.join(icons)}")
+
+        if track_uris:
+            playlist_response = create_playlist(st.session_state.access_token, user_id, name, description)
+            if "id" in playlist_response:
+                playlist_id = playlist_response["id"]
+                add_tracks_to_playlist(st.session_state.access_token, playlist_id, track_uris)
+                st.success(f"✅ Playlist '{name}' successfully created on Spotify.")
             else:
-                st.warning("⚠️ Please complete all fields to create the playlist.")
+                st.error("❌ Could not create playlist on Spotify.")
+    else:
+        st.error("❌ Could not generate playlist.")
 
 if __name__ == "__main__":
     main()
