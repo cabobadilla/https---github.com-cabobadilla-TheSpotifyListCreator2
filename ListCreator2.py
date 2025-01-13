@@ -68,6 +68,7 @@ def load_feature_flags():
     """
     try:
         feature_flags = st.secrets["feature_flags"]
+        st.write("🔍 Debug: Feature flags loaded:", feature_flags)  # Debugging statement
         return feature_flags
     except KeyError:
         st.error("❌ Feature flags not found in Streamlit secrets.")
@@ -302,6 +303,8 @@ def display_playlist_creation_form():
             discover_new = st.checkbox("🆕 New Music", help="Include recent tracks from the last 3 years")
     else:
         discover_new = False
+
+    st.write("🔍 Debug: New Music flag is", feature_flags.get("new_music", False))  # Debugging statement
 
     if st.button("🎵 Generate and Create Playlist 🎵"):
         if user_id and mood and genres:
