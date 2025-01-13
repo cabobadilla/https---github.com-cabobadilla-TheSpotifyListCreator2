@@ -61,6 +61,20 @@ def load_config():
 
 config = load_config()
 
+# Load feature flags from Streamlit secrets
+def load_feature_flags():
+    """
+    Load feature flags from Streamlit secrets.
+    """
+    try:
+        feature_flags = st.secrets["feature_flags"]
+        return feature_flags
+    except KeyError:
+        st.error("❌ Feature flags not found in Streamlit secrets.")
+        return {"hidden_gems": False, "new_music": False}
+
+feature_flags = load_feature_flags()
+
 # Function to get authorization URL
 def get_auth_url(client_id, redirect_uri, scopes):
     auth_url = "https://accounts.spotify.com/authorize"
@@ -275,10 +289,19 @@ def display_playlist_creation_form():
     mood = st.selectbox("😊 Select your desired mood", config["moods"])
     genres = st.multiselect("🎸 Select music genres", config["genres"])
     col1, col2 = st.columns(2)
-    with col1:
-        hidden_gems = st.checkbox("💎 Hidden Gems", help="Include lesser-known tracks in your playlist")
-    with col2:
-        discover_new = st.checkbox("🆕 New Music", help="Include recent tracks from the last 3 years")
+    
+    # Use feature flags to control the visibility of checkboxes
+    if feature_flags.get("hidden_gems", False):
+        with col1:
+            hidden_gems = st.checkbox("💎 Hidden Gems", help="Include lesser-known tracks in your playlist")
+    else:
+        hidden_gems = False
+    
+    if feature_flags.get("new_music", False):
+        with col2:
+            discover_new = st.checkbox("🆕 New Music", help="Include recent tracks from the last 3 years")
+    else:
+        discover_new = False
 
     if st.button("🎵 Generate and Create Playlist 🎵"):
         if user_id and mood and genres:
